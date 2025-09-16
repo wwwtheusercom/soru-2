@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soru Üretici</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+        .correct-answer {
+            background-color: #10b981 !important;
+            color: white !important;
+        }
+        .wrong-answer {
+            background-color: #ef4444 !important;
+            color: white !important;
+        }
+        .correct-outline {
+            border: 2px solid #10b981;
+        }
+        .wrong-outline {
+            border: 2px solid #ef4444;
+        }
+        .message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+        }
+        #pdfFile {
+            display: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-6 flex items-center justify-center min-h-screen">
+    <div class="bg-white rounded-xl shadow-lg p-8 w-full max-w-2xl">
+        <h1 class="text-3xl font-bold text-center mb-4">Soru Üretici</h1>
+        <p class="text-gray-600 text-center mb-8">Notlarınızı yazın ve çoktan seçmeli sorularla pratik yapın.</p>
+
+        <!-- Metin Girişi ve Soru Sayısı Bölümü -->
+        <div class="space-y-4 mb-6">
+            <textarea id="notesInput" class="w-full h-48 p-4 border border-gray-300 rounded-lg resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors" placeholder="Notlarınızı buraya yazın..."></textarea>
+            
+            <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4">
+                <label for="numQuestions" class="text-lg font-medium">Soru Sayısı:</label>
+                <input type="number" id="numQuestions" value="5" min="1" max="10" class="w-full sm:w-24 text-center border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors">
+            </div>
+        </div>
+        
+        <div class="text-center">
+            <button id="generateBtn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-all duration-300 transform hover:scale-105 shadow-md">
+                Quiz Oluştur
+            </button>
+        </div>
+
+        <!-- Yükleme Göstergesi ve Mesajlar -->
+        <div id="loading" class="text-center mt-8 hidden">
+            <div class="w-12 h-12 border-4 border-t-4 border-t-transparent border-blue-500 border-solid rounded-full animate-spin mx-auto"></div>
+            <p class="text-gray-500 mt-3 font-semibold">Sorular oluşturuluyor, lütfen bekleyin...</p>
+        </div>
+        <div id="messageBox" class="message-box bg-white p-6 rounded-xl shadow-2xl hidden" role="alert">
+            <p id="messageText" class="text-gray-700 text-center font-medium"></p>
+            <div class="flex justify-center mt-4">
+                <button id="closeMessageBtn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                    Tamam
+                </button>
+            </div>
+        </div>
+
+        <!-- Soru Gösterim Alanı -->
+        <div id="quizContainer" class="mt-8 space-y-6 hidden"></div>
+    </div>
+
+    <script type="module">
+        const apiKey = "";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+        const notesInputEl = document.getElementById('notesInput');
+        const numQuestionsEl = document.getElementById('numQuestions');
+        const generateBtn = document.getElementById('generateBtn');
+        const loadingEl = document.getElementById('loading');
+        const quizContainerEl = document.getElementById('quizContainer');
+        const messageBoxEl = document.getElementById('messageBox');
+        const messageTextEl = document.getElementById('messageText');
+        const closeMessageBtn = document.getElementById('closeMessageBtn');
+
+        const showMessageBox = (message) => {
+            messageTextEl.textContent = message;
+            messageBoxEl.classList.remove('hidden');
+        };
+
+        const hideMessageBox = () => {
+            messageBoxEl.classList.add('hidden');
+        };
+
+        closeMessageBtn.addEventListener('click', hideMessageBox);
+
+        generateBtn.addEventListener('click', () => {
+            generateQuiz();
+        });
+
+        const generateQuiz = async () => {
+            const notesText = notesInputEl.value;
+            const numQuestions = numQuestionsEl.value;
+
+            if (!notesText.trim()) {
+                showMessageBox("Lütfen notlarınızı metin kutusuna yazın.");
+                return;
+            }
+
+            if (numQuestions < 1 || numQuestions > 10) {
+                showMessageBox("Lütfen 1 ile 10 arasında bir soru sayısı girin.");
+                return;
+            }
+            
+            loadingEl.classList.remove('hidden');
+            quizContainerEl.classList.add('hidden');
+            generateBtn.disabled = true;
+
+            try {
+                const questions = await getQuestionsFromModel(notesText, numQuestions);
+                renderQuestions(questions);
+
+            } catch (error) {
+                console.error("Hata:", error);
+                showMessageBox("Sorular oluşturulurken bir hata oluştu: " + error.message);
+            } finally {
+                loadingEl.classList.add('hidden');
+                generateBtn.disabled = false;
+            }
+        };
+
+        const getQuestionsFromModel = async (text, count) => {
+            const userPrompt = `Aşağıdaki metinden, öğrenci seviyesine uygun, her biri dört şıklı olan ${count} adet çoktan seçmeli soru ve her sorunun doğru cevabını içeren bir JSON dizisi oluştur. Cevaplar sadece şıklardan biri olmalı ve metinde geçen bilgilere dayanmalı.
+            
+            Metin:
+            ${text}
+            `;
+            
+            const payload = {
+                contents: [{
+                    parts: [{ text: userPrompt }]
+                }],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "ARRAY",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                "question": { "type": "STRING" },
+                                "options": {
+                                    "type": "ARRAY",
+                                    "items": { "type": "STRING" }
+                                },
+                                "correctAnswer": { "type": "STRING" }
+                            }
+                        }
+                    },
+                    temperature: 0.1
+                }
+            };
+
+            let response;
+            let retryCount = 0;
+            const maxRetries = 3;
+            const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+            while (retryCount < maxRetries) {
+                try {
+                    response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        if (response.status === 429) {
+                            console.warn("API kota aşıldı, tekrar denenecek...");
+                            retryCount++;
+                            await delay(Math.pow(2, retryCount) * 1000);
+                            continue;
+                        }
+                        throw new Error(`API hatası: ${response.statusText}`);
+                    }
+
+                    const result = await response.json();
+                    if (!result.candidates || result.candidates.length === 0 || !result.candidates[0].content || !result.candidates[0].content.parts || result.candidates[0].content.parts.length === 0) {
+                        throw new Error("API'den geçersiz veya boş bir yanıt alındı.");
+                    }
+                    const jsonString = result.candidates[0].content.parts[0].text;
+                    const cleanedJsonString = jsonString.trim(); // Boşlukları temizle
+                    const questions = JSON.parse(cleanedJsonString);
+
+                    const isValid = Array.isArray(questions) && questions.every(q => 
+                        q.hasOwnProperty('question') && typeof q.question === 'string' &&
+                        q.hasOwnProperty('options') && Array.isArray(q.options) &&
+                        q.hasOwnProperty('correctAnswer') && typeof q.correctAnswer === 'string'
+                    );
+
+                    if (!isValid) {
+                        throw new Error("API yanıtı beklenen formatta değil.");
+                    }
+
+                    return questions;
+
+                } catch (err) {
+                    console.error("Fetch veya JSON hatası:", err);
+                    if (retryCount >= maxRetries - 1) {
+                        throw new Error("Sorular oluşturulurken beklenmedik bir hata oluştu. Lütfen tekrar deneyin.");
+                    }
+                    retryCount++;
+                    await delay(Math.pow(2, retryCount) * 1000);
+                }
+            }
+        };
+
+        const renderQuestions = (questions) => {
+            if (!questions || questions.length === 0) {
+                showMessageBox("Notlardan soru üretilemedi. Lütfen daha fazla metin içeren bir not girin.");
+                return;
+            }
+
+            quizContainerEl.innerHTML = '';
+            questions.forEach((q, index) => {
+                const questionDiv = document.createElement('div');
+                questionDiv.classList.add('bg-gray-50', 'rounded-lg', 'p-6', 'shadow-sm', 'border', 'border-gray-200');
+                questionDiv.innerHTML = `
+                    <p class="font-semibold text-lg mb-4 text-gray-800">Soru ${index + 1}: ${q.question}</p>
+                    <div class="space-y-3"></div>
+                `;
+                const optionsContainer = questionDiv.querySelector('div');
+
+                q.options.forEach(option => {
+                    const optionButton = document.createElement('button');
+                    optionButton.textContent = option;
+                    optionButton.classList.add(
+                        'w-full', 'text-left', 'py-3', 'px-4', 'rounded-lg', 'border',
+                        'border-gray-300', 'bg-white', 'hover:bg-gray-200', 'transition-colors', 'duration-200',
+                        'focus:outline-none', 'focus:ring-2', 'focus:ring-blue-500'
+                    );
+                    optionButton.addEventListener('click', () => handleAnswer(optionButton, q.correctAnswer));
+                    optionsContainer.appendChild(optionButton);
+                });
+
+                quizContainerEl.appendChild(questionDiv);
+            });
+
+            quizContainerEl.classList.remove('hidden');
+        };
+
+        const handleAnswer = (selectedButton, correctAnswer) => {
+            const parentDiv = selectedButton.closest('div');
+            const allButtons = parentDiv.querySelectorAll('button');
+            const questionDiv = selectedButton.closest('.bg-gray-50');
+
+            allButtons.forEach(btn => {
+                btn.disabled = true;
+                btn.classList.remove('hover:bg-gray-200', 'focus:ring-blue-500');
+            });
+
+            const correctButton = Array.from(allButtons).find(btn => btn.textContent.trim() === correctAnswer.trim());
+            if (selectedButton.textContent.trim() === correctAnswer.trim()) {
+                selectedButton.classList.add('correct-answer');
+                questionDiv.classList.add('correct-outline');
+            } else {
+                selectedButton.classList.add('wrong-answer');
+                correctButton.classList.add('correct-answer');
+                questionDiv.classList.add('wrong-outline');
+            }
+        };
+    </script>
+</body>
+</html>
